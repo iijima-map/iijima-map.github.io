@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>社内地点マップ</title>
+  <meta name="theme-color" content="#1a73e8">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="地点マップ">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+    html, body { height: auto; }
+    .bar { position: sticky !important; top: 0; }
+    /* 地図は「画面の高さ − 上の帯 − 下の一覧の帯」で、ほぼ画面いっぱい */
+    #map { position: relative; height: calc(100dvh - 56px - 52px); }
+    #list { background: #fff; min-height: calc(100dvh - 56px); }
+    #list .head { position: sticky; top: 56px; background: #1a73e8; color: #fff; font-size: 14px; font-weight: bold;
+      height: 52px; display: flex; align-items: center; justify-content: center; gap: 6px; z-index: 4; cursor: pointer; }
+    #list .head small { font-weight: normal; opacity: .85; }
+    .item.sel { background: #eef3fd; }
+    .bar { position: relative; flex: none; z-index: 5; display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; background: rgba(255,255,255,.95); box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+    .bar h1 { font-size: 16px; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .btn { border: 0; border-radius: 20px; padding: 8px 14px; font-size: 14px; background: #1a73e8; color: #fff; cursor: pointer; }
+    .btn.sub { background: #fff; color: #1a73e8; border: 1px solid #1a73e8; }
+    #status { position: absolute; top: 62px; left: 8px; z-index: 5; font-size: 12px; background: rgba(255,255,255,.9); padding: 4px 8px; border-radius: 4px; }
+    .item { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #eee; }
+    .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+    .item .name { flex: 1; font-size: 15px; }
+    .item .memo { font-size: 12px; color: #b3261e; }
+    .item .pic { font-size: 11px; color: #1a73e8; }
+    .pin-label { text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 3px #fff; }
+    .iw { max-width: 240px; }
+    .iw h3 { margin: 0 0 6px; font-size: 15px; }
+    .iw .memo { margin: 0 0 8px; font-size: 13px; white-space: pre-wrap; color: #b3261e; background: #fdecea; border-radius: 6px; padding: 6px 8px; }
+    .iw .thumb { display: block; width: 100%; max-height: 160px; object-fit: contain; background: #f4f4f4; border-radius: 6px; margin-bottom: 6px; cursor: zoom-in; }
+    .iw .loading { font-size: 12px; color: #888; margin-bottom: 6px; }
+    .iw .upd { font-size: 11px; color: #888; }
+    .iw a.btn { display: inline-block; text-decoration: none; margin-top: 6px; }
+    #viewer { position: absolute; inset: 0; z-index: 20; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; }
+    #viewer.open { display: flex; }
+    #viewer img { max-width: 96%; max-height: 88%; object-fit: contain; background: #fff; }
+    #viewer .close { position: absolute; top: 10px; right: 10px; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <h1 id="title">地点マップ</h1>
+    <button class="btn" onclick="load(false)">更新</button>
+  </div>
+  <div id="map"></div>
+  <div id="list"></div>
+  <div id="status">読み込み中…</div>
+  <div id="viewer" onclick="closeViewer()"><img id="big" alt=""><button class="btn close" onclick="closeViewer()">閉じる</button></div>
+
+  <script>
+    // ▼ Apps Script ウェブアプリのURL（/exec まで）
+    var DATA_URL = 'https://script.google.com/macros/s/AKfycbxs72YrlQPypMHsW3PEk6w2DlB2zHwvMoedGmW30kGxWV_yGZP-6H7z_xVTxPmDV8el/exec';
+    var map, info, markers = [], points = [], firstLoad = true, imgCache = {};
+
+    fetchData().then(function (d) {
+      document.getElementById('title').textContent = d.title;
+      document.title = d.title;
+      points = d.points;
+      var sc = document.createElement('script');
+      sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(d.apiKey) + '&callback=initMap&language=ja&region=JP';
+      sc.async = true;
+      document.head.appendChild(sc);
+    }).catch(function (e) { setStatus('読み込みエラー: ' + e.message); });
+
+    function fetchData() {
+      return fetch(DATA_URL + '?format=json&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    }
+    function fetchImage(id) {
+      if (imgCache[id]) return Promise.resolve(imgCache[id]);
+      return fetch(DATA_URL + '?format=json&img=' + encodeURIComponent(id), { credentials: 'omit' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { if (!d.data) throw new Error('画像がありません'); imgCache[id] = 'data:' + d.mime + ';base64,' + d.data; return imgCache[id]; });
+    }
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 35.681, lng: 139.767 }, zoom: 11,
+        mapTypeControl: false, streetViewControl: false, fullscreenControl: false, gestureHandling: 'greedy'
+      });
+      info = new google.maps.InfoWindow();
+      draw(true); firstLoad = false;
+      setInterval(function () { load(false); }, 120000);
+      // スリープや別アプリから戻ったら、すぐ最新の地点を読み直す（地図は読み込み直さない）
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') load(false); });
+    }
+
+    function load(fit) {
+      setStatus('更新中…');
+      fetchData().then(function (d) { points = d.points; draw(fit || firstLoad); firstLoad = false; })
+        .catch(function (e) { setStatus('読み込みエラー: ' + e.message); });
+    }
+
+    function pinIcon(color) {
+      return {
+        path: 'M12 0C7 0 3 4 3 9c0 6.5 9 15 9 15s9-8.5 9-15c0-5-4-9-9-9zm0 12.5A3.5 3.5 0 1 1 12 5.5a3.5 3.5 0 0 1 0 7z',
+        fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5,
+        scale: 1.6, anchor: new google.maps.Point(12, 24), labelOrigin: new google.maps.Point(12, 31)
+      };
+    }
+
+    function draw(fit) {
+      markers.forEach(function (m) { m.setMap(null); });
+      markers = [];
+      var bounds = new google.maps.LatLngBounds();
+      points.forEach(function (p, i) {
+        var m = new google.maps.Marker({
+          position: { lat: p.lat, lng: p.lng }, map: map, title: p.name, icon: pinIcon(p.color),
+          label: { text: p.name.length > 12 ? p.name.slice(0, 12) + '…' : p.name, className: 'pin-label', fontSize: '12px', fontWeight: 'bold', color: '#202124' }
+        });
+        m.addListener('click', function () { openInfo(i); });
+        markers.push(m);
+        bounds.extend(m.getPosition());
+      });
+      if (fit && points.length) {
+        if (points.length === 1) { map.setCenter(bounds.getCenter()); map.setZoom(15); }
+        else map.fitBounds(bounds, 60);
+      }
+      renderList();
+      setStatus(points.length + '件 ・ ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 更新');
+    }
+
+    function openInfo(i) {
+      var p = points[i];
+      var nav = 'https://www.google.com/maps/dir/?api=1&destination=' + p.lat + ',' + p.lng;
+      var box = document.createElement('div');
+      box.className = 'iw';
+      box.innerHTML = '<h3>' + esc(p.name) + '</h3>' +
+        (p.memo ? '<div class="memo">' + esc(p.memo) + '</div>' : '') +
+        (p.img ? '<div class="loading">画像を読み込み中…</div>' : '') +
+        '<div class="upd">更新: ' + esc(p.updated) + '</div>' +
+        '<a class="btn" href="' + nav + '" target="_blank" rel="noopener">ここへナビ</a>';
+      info.setContent(box);
+      info.open(map, markers[i]);
+      if (p.img) {
+        fetchImage(p.img).then(function (src) {
+          var ld = box.querySelector('.loading');
+          var im = document.createElement('img');
+          im.className = 'thumb'; im.src = src; im.alt = p.name;
+          im.onclick = function () { openViewer(src); };
+          if (ld) ld.replaceWith(im);
+        }).catch(function () { var ld = box.querySelector('.loading'); if (ld) ld.textContent = '画像を読み込めませんでした'; });
+      }
+    }
+
+    function openViewer(src) { document.getElementById('big').src = src; document.getElementById('viewer').classList.add('open'); }
+    function closeViewer() { document.getElementById('viewer').classList.remove('open'); }
+
+    function renderList() {
+      var el = document.getElementById('list');
+      el.innerHTML = '<div class="head" onclick="scrollToList()">▼ 地点一覧 ' + points.length + '件 <small>（上にスワイプ）</small></div>' + (points.length ? '' : '<div class="item">地点はまだありません</div>');
+      points.forEach(function (p, i) {
+        var d = document.createElement('div');
+        d.className = 'item';
+        d.innerHTML = '<span class="dot" style="background:' + esc(p.color) + '"></span>' +
+          '<div class="name">' + esc(p.name) +
+          (p.memo ? '<div class="memo">' + esc(p.memo.split('\n')[0]) + '</div>' : '') +
+          (p.img ? '<div class="pic">画像あり</div>' : '') + '</div>';
+        d.onclick = function () {
+          [].forEach.call(el.querySelectorAll('.item'), function (x) { x.classList.remove('sel'); });
+          d.classList.add('sel');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          map.panTo(markers[i].getPosition()); map.setZoom(16); openInfo(i);
+        };
+        el.appendChild(d);
+      });
+    }
+
+    function scrollToList() { document.getElementById('list').scrollIntoView({ behavior: 'smooth' }); }
+    function setStatus(t) { document.getElementById('status').textContent = t; }
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+  </script>
+</body>
+</html>
