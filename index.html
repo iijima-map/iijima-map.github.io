@@ -34,6 +34,7 @@
     .item .memo { font-size: 12px; color: #b3261e; }
     .item .pic { font-size: 11px; color: #1a73e8; }
     .pin-label { text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 3px #fff; }
+    .pin-label.two { white-space: pre-line; line-height: 1.25; text-align: center; }
     .iw { max-width: 240px; }
     .iw h3 { margin: 0 0 6px; font-size: 15px; }
     .iw .memo { margin: 0 0 8px; font-size: 13px; white-space: pre-wrap; color: #b3261e; background: #fdecea; border-radius: 6px; padding: 6px 8px; }
@@ -101,12 +102,17 @@
         .catch(function (e) { setStatus('読み込みエラー: ' + e.message); });
     }
 
-    function pinIcon(color) {
+    function pinIcon(color, two) {
       return {
         path: 'M12 0C7 0 3 4 3 9c0 6.5 9 15 9 15s9-8.5 9-15c0-5-4-9-9-9zm0 12.5A3.5 3.5 0 1 1 12 5.5a3.5 3.5 0 0 1 0 7z',
         fillColor: color, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5,
-        scale: 1.6, anchor: new google.maps.Point(12, 24), labelOrigin: new google.maps.Point(12, 31)
+        scale: 1.6, anchor: new google.maps.Point(12, 24), labelOrigin: new google.maps.Point(12, two ? 36 : 31)
       };
+    }
+
+    // 名前は2行まで。1行12文字を超えたら「…」
+    function pinText(n) {
+      return n.split('\n').slice(0, 2).map(function (s) { return s.length > 12 ? s.slice(0, 12) + '…' : s; }).join('\n');
     }
 
     function draw(fit) {
@@ -115,8 +121,8 @@
       var bounds = new google.maps.LatLngBounds();
       points.forEach(function (p, i) {
         var m = new google.maps.Marker({
-          position: { lat: p.lat, lng: p.lng }, map: map, title: p.name, icon: pinIcon(p.color),
-          label: { text: p.name.length > 12 ? p.name.slice(0, 12) + '…' : p.name, className: 'pin-label', fontSize: '12px', fontWeight: 'bold', color: '#202124' }
+          position: { lat: p.lat, lng: p.lng }, map: map, title: p.name, icon: pinIcon(p.color, p.name.indexOf('\n') >= 0),
+          label: { text: pinText(p.name), className: p.name.indexOf('\n') >= 0 ? 'pin-label two' : 'pin-label', fontSize: '12px', fontWeight: 'bold', color: '#202124' }
         });
         m.addListener('click', function () { openInfo(i); });
         markers.push(m);
@@ -135,7 +141,7 @@
       var nav = 'https://www.google.com/maps/dir/?api=1&destination=' + p.lat + ',' + p.lng;
       var box = document.createElement('div');
       box.className = 'iw';
-      box.innerHTML = '<h3>' + esc(p.name) + '</h3>' +
+      box.innerHTML = '<h3>' + esc(p.name).replace(/\n/g, '<br>') + '</h3>' +
         (p.memo ? '<div class="memo">' + esc(p.memo) + '</div>' : '') +
         (p.img ? '<div class="loading">画像を読み込み中…</div>' : '') +
         '<div class="upd">更新: ' + esc(p.updated) + '</div>' +
@@ -163,7 +169,7 @@
         var d = document.createElement('div');
         d.className = 'item';
         d.innerHTML = '<span class="dot" style="background:' + esc(p.color) + '"></span>' +
-          '<div class="name">' + esc(p.name) +
+          '<div class="name">' + esc(p.name).replace(/\n/g, ' ') +
           (p.memo ? '<div class="memo">' + esc(p.memo.split('\n')[0]) + '</div>' : '') +
           (p.img ? '<div class="pic">画像あり</div>' : '') + '</div>';
         d.onclick = function () {
