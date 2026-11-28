@@ -51,6 +51,7 @@
 <body>
   <div class="bar">
     <h1 id="title">地点マップ</h1>
+    <select id="who" onchange="pickWho()" aria-label="担当" style="display: none; font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid #1a73e8; color: #1a73e8; background: #fff; max-width: 9em"></select>
     <button class="btn" onclick="load(false)">更新</button>
   </div>
   <div id="map"></div>
@@ -62,11 +63,33 @@
     // ▼ Apps Script ウェブアプリのURL（/exec まで）
     var DATA_URL = 'https://script.google.com/macros/s/AKfycbxs72YrlQPypMHsW3PEk6w2DlB2zHwvMoedGmW30kGxWV_yGZP-6H7z_xVTxPmDV8el/exec';
     var map, info, markers = [], points = [], firstLoad = true, imgCache = {};
+    // 担当者（人ごとの予定）。スマホに覚えておく
+    var who = '', meta = {};
+    try { who = localStorage.getItem('chiten_who') || ''; } catch (e) {}
+    function applyMeta(d) {
+      meta = d;
+      var sel = document.getElementById('who');
+      var ppl = (d.people || []).slice();
+      if (d.mode === 'today' && (ppl.length || who)) {
+        if (who && ppl.indexOf(who) < 0) ppl.push(who);
+        sel.innerHTML = '<option value="">全員</option>' + ppl.map(function (n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+        sel.value = who;
+        sel.style.display = '';
+      } else {
+        sel.style.display = 'none';
+      }
+    }
+    function pickWho() {
+      who = document.getElementById('who').value;
+      try { localStorage.setItem('chiten_who', who); } catch (e) {}
+      load(true);
+    }
 
     fetchData().then(function (d) {
       document.getElementById('title').textContent = d.title;
       document.title = d.title;
       points = d.points;
+      applyMeta(d);
       var sc = document.createElement('script');
       sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(d.apiKey) + '&callback=initMap&language=ja&region=JP';
       sc.async = true;
@@ -74,7 +97,7 @@
     }).catch(function (e) { setStatus('読み込みエラー: ' + e.message); });
 
     function fetchData() {
-      return fetch(DATA_URL + '?format=json&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
+      return fetch(DATA_URL + '?format=json&who=' + encodeURIComponent(who) + '&t=' + Date.now(), { credentials: 'omit', cache: 'no-store' })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
     }
     function fetchImage(id) {
@@ -98,7 +121,7 @@
 
     function load(fit) {
       setStatus('更新中…');
-      fetchData().then(function (d) { points = d.points; draw(fit || firstLoad); firstLoad = false; })
+      fetchData().then(function (d) { points = d.points; applyMeta(d); draw(fit || firstLoad); firstLoad = false; })
         .catch(function (e) { setStatus('読み込みエラー: ' + e.message); });
     }
 
@@ -122,7 +145,7 @@
       points.forEach(function (p, i) {
         var m = new google.maps.Marker({
           position: { lat: p.lat, lng: p.lng }, map: map, title: p.name, icon: pinIcon(p.color, p.name.indexOf('\n') >= 0),
-          label: { text: pinText(p.name), className: p.name.indexOf('\n') >= 0 ? 'pin-label two' : 'pin-label', fontSize: '12px', fontWeight: 'bold', color: '#202124' }
+          label: { text: (p.no ? p.no + '. ' : '') + pinText(p.name), className: p.name.indexOf('\n') >= 0 ? 'pin-label two' : 'pin-label', fontSize: '12px', fontWeight: 'bold', color: '#202124' }
         });
         m.addListener('click', function () { openInfo(i); });
         markers.push(m);
@@ -133,7 +156,7 @@
         else map.fitBounds(bounds, 60);
       }
       renderList();
-      setStatus(points.length + '件 ・ ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 更新');
+      setStatus((meta.mode === 'today' ? (points.length ? '今日の予定 ' + points.length + '件' : '今日の予定はまだありません') : points.length + '件') + ' ・ ' + new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + ' 更新');
     }
 
     function openInfo(i) {
@@ -144,6 +167,7 @@
       box.innerHTML = '<h3>' + esc(p.name).replace(/\n/g, '<br>') + '</h3>' +
         (p.memo ? '<div class="memo">' + esc(p.memo) + '</div>' : '') +
         (p.img ? '<div class="loading">画像を読み込み中…</div>' : '') +
+        (p.planMemo ? '<div class="memo" style="background:#e8eefb;color:#1a73e8">予定：' + esc(p.planMemo) + '</div>' : '') +
         '<div class="upd">更新: ' + esc(p.updated) + '</div>' +
         '<a class="btn" href="' + nav + '" target="_blank" rel="noopener">ここへナビ</a>';
       info.setContent(box);
@@ -164,12 +188,12 @@
 
     function renderList() {
       var el = document.getElementById('list');
-      el.innerHTML = '<div class="head" onclick="scrollToList()">▼ 地点一覧 ' + points.length + '件 <small>（上にスワイプ）</small></div>' + (points.length ? '' : '<div class="item">地点はまだありません</div>');
+      el.innerHTML = '<div class="head" onclick="scrollToList()">▼ ' + (meta.mode === 'today' ? '今日の予定 ' : '地点一覧 ') + points.length + '件 <small>（上にスワイプ）</small></div>' + (points.length ? '' : '<div class="item">' + (meta.mode === 'today' ? '今日の予定はまだありません' : '地点はまだありません') + '</div>');
       points.forEach(function (p, i) {
         var d = document.createElement('div');
         d.className = 'item';
         d.innerHTML = '<span class="dot" style="background:' + esc(p.color) + '"></span>' +
-          '<div class="name">' + esc(p.name).replace(/\n/g, ' ') +
+          '<div class="name">' + (p.no ? '<b>' + p.no + '.</b> ' : '') + esc(p.name).replace(/\n/g, ' ') + (p.who ? ' <small>（' + esc(p.who) + '）</small>' : '') + (p.planMemo ? '<div class="memo" style="color:#1a73e8">予定：' + esc(p.planMemo) + '</div>' : '') +
           (p.memo ? '<div class="memo">' + esc(p.memo.split('\n')[0]) + '</div>' : '') +
           (p.img ? '<div class="pic">画像あり</div>' : '') + '</div>';
         d.onclick = function () {
